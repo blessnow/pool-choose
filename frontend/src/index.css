@@ -1,0 +1,74 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #0a0e17;
+  --card: #111827;
+  --card-hover: #1a2332;
+  --border: #1e293b;
+  --accent: #f59e0b;
+  --accent2: #10b981;
+  --red: #ef4444;
+  --green: #22c55e;
+  --blue: #3b82f6;
+  --purple: #a78bfa;
+  --text: #f8fbff;
+  --text-dim: #d6e0ee;
+  --text-muted: #b4c2d6;
+  --gold: #fbbf24;
+  --orange: #f97316;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Heiti SC', sans-serif;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+a {
+  color: #ffd36b;
+  text-decoration-color: rgba(255, 211, 107, 0.5);
+  text-underline-offset: 2px;
+}
+
+a:hover {
+  color: #ffe39a;
+  text-decoration-color: rgba(255, 227, 154, 0.85);
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.stock-card {
+  animation: fadeIn 0.3s ease both;
+}
