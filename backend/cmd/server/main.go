@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 
+	"github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
 	"github.com/yuchi/cycle-stock/internal/handlers"
 	"github.com/yuchi/cycle-stock/internal/repository"
@@ -31,6 +32,9 @@ func main() {
 
 	// 创建路由
 	r := gin.Default()
+
+	// Gzip压缩（对静态文件和API响应都生效）
+	r.Use(gzip.Gzip(gzip.DefaultCompression))
 
 	// CORS配置
 	r.Use(func(c *gin.Context) {
