@@ -61,6 +61,8 @@ func main() {
 		{
 			// 股票
 			auth.GET("/stocks", handlers.GetStocks)
+			auth.GET("/stocks/search", handlers.SearchStocks)
+			auth.GET("/stocks/info", handlers.GetStockInfo)
 			auth.GET("/stocks/:code", handlers.GetStock)
 			auth.POST("/stocks", handlers.CreateStock)
 			auth.PUT("/stocks/:code", handlers.UpdateStock)

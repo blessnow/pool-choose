@@ -5,7 +5,10 @@ import { SummaryGrid } from './components/SummaryGrid';
 import { CycleSection } from './components/CycleSection';
 import { FilterBar, FilterState, SortState } from './components/FilterBar';
 import { StockCard } from './components/StockCard';
+import { StockManager } from './components/StockManager';
 import './index.css';
+
+type View = 'panel' | 'manage';
 
 function App() {
   const [token, setToken] = useState<string>('');
@@ -23,6 +26,7 @@ function App() {
   const [filters, setFilters] = useState<FilterState>({ tab: 'all' });
   const [sort, setSort] = useState<SortState>({ field: 'recommend', direction: 'asc' });
   const [searchQuery, setSearchQuery] = useState('');
+  const [view, setView] = useState<View>('panel');
 
   // 登录
   const handleLogin = async (e: React.FormEvent) => {
@@ -257,8 +261,30 @@ function App() {
     );
   }
 
+  // 配置页
+  if (view === 'manage') {
+    return (
+      <StockManager
+        token={token}
+        onBack={() => {
+          setView('panel');
+          loadData(token);
+        }}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#0a0e17]">
+      {/* 右上角操作区 */}
+      <div className="absolute top-4 right-4 z-20 flex gap-2">
+        <button
+          onClick={() => setView('manage')}
+          className="px-3 py-1.5 rounded-lg text-sm border border-[#1e293b] bg-[#111827]/80 backdrop-blur text-[#d6e0ee] hover:border-[#f59e0b] hover:text-[#f59e0b] transition-all"
+        >
+          ⚙️ 配置
+        </button>
+      </div>
       <div className="max-w-[1200px] mx-auto px-4 py-6 relative z-10">
         {/* Hero背景 */}
         <div className="relative -mt-6 -mx-4 mb-0 pt-[67px]">

@@ -94,6 +94,35 @@ export async function getStocks(token: string): Promise<ApiResponse<StockWithQuo
   return res.json();
 }
 
+export interface StockSearchResult {
+  code: string;
+  name: string;
+  pinyin: string;
+  market: string;
+}
+
+export async function searchStocks(token: string, q: string, limit = 10): Promise<ApiResponse<StockSearchResult[]>> {
+  const res = await fetch(`${API_BASE}/stocks/search?q=${encodeURIComponent(q)}&limit=${limit}`, {
+    headers: { Authorization: token },
+  });
+  return res.json();
+}
+
+export interface StockInfo {
+  code: string;
+  name: string;
+  sector: string;
+  industry: string;
+  market: string;
+}
+
+export async function getStockInfo(token: string, code: string): Promise<ApiResponse<StockInfo>> {
+  const res = await fetch(`${API_BASE}/stocks/info?code=${encodeURIComponent(code)}`, {
+    headers: { Authorization: token },
+  });
+  return res.json();
+}
+
 export async function getStock(token: string, code: string): Promise<ApiResponse<Stock>> {
   const res = await fetch(`${API_BASE}/stocks/${code}`, {
     headers: { Authorization: token },
@@ -194,6 +223,13 @@ export interface ValuationBandPoint {
   value: number;
   percentile?: number;
   tracks: {
+    p90?: number;
+    p70?: number;
+    p50?: number;
+    p30?: number;
+    p10?: number;
+  };
+  priceTracks: {
     p90?: number;
     p70?: number;
     p50?: number;

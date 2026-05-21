@@ -156,6 +156,42 @@ func DeleteStock(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+// SearchStocks 按拼音首字母 / 中文名 / 股票代码模糊检索 A 股，用于配置页自动补全
+func SearchStocks(c *gin.Context) {
+	q := strings.TrimSpace(c.Query("q"))
+	if q == "" {
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": []interface{}{}})
+		return
+	}
+	limit := 10
+	if s := c.Query("limit"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 && n <= 20 {
+			limit = n
+		}
+	}
+	results, err := services.SearchStocks(q, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": results})
+}
+
+// GetStockInfo 拉取单只 A 股的行业板块信息，配置页用来一键回填
+func GetStockInfo(c *gin.Context) {
+	code := strings.TrimSpace(c.Query("code"))
+	if code == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "缺少 code 参数"})
+		return
+	}
+	info, err := services.GetStockInfo(code)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": info})
+}
+
 // GetQuotes 批量获取行情
 func GetQuotes(c *gin.Context) {
 	codesStr := c.Query("codes")

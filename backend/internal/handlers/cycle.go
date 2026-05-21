@@ -7,13 +7,26 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/yuchi/cycle-stock/internal/models"
 	"github.com/yuchi/cycle-stock/internal/repository"
+	"github.com/yuchi/cycle-stock/internal/services"
 )
 
 // GetCycleInsight 获取周期分析数据
 func GetCycleInsight(c *gin.Context) {
+	// 拉取最新 CPI/PPI，失败时回退到 nil，由下方逻辑兜底
+	liveMacro, macroErr := services.FetchMacroCards()
+
 	insight, err := repository.GetCycleInsight()
 	if err != nil {
-		// 返回默认数据
+		// DB 无数据时的默认响应：宏观卡片优先用实时数据，其它字段用占位
+		macroCards := liveMacro
+		if macroErr != nil || len(macroCards) == 0 {
+			macroCards = []models.MacroCard{
+				{Label: "CPI 同比", Value: "--", Detail: "数据加载中"},
+				{Label: "CPI 环比", Value: "--", Detail: "数据加载中"},
+				{Label: "PPI 同比", Value: "--", Detail: "数据加载中"},
+				{Label: "PPI 环比", Value: "--", Detail: "数据加载中"},
+			}
+		}
 		c.JSON(http.StatusOK, gin.H{
 			"ok": true,
 			"data": gin.H{
@@ -21,12 +34,7 @@ func GetCycleInsight(c *gin.Context) {
 				"updatedAt":    "2026-05-15T00:00:00+08:00",
 				"dataLayer":    "最新宏观数据加载中...",
 				"opinionLayer": "周期分析加载中...",
-				"macroCards": []gin.H{
-					{"label": "CPI 同比", "value": "--", "detail": "数据加载中"},
-					{"label": "CPI 环比", "value": "--", "detail": "数据加载中"},
-					{"label": "PPI 同比", "value": "--", "detail": "数据加载中"},
-					{"label": "PPI 环比", "value": "--", "detail": "数据加载中"},
-				},
+				"macroCards":   macroCards,
 				"bars": []gin.H{
 					{"label": "内需价格温度", "value": 50, "gradient": "linear-gradient(90deg,#ef4444,#f59e0b)", "labels": []string{"偏冷", "修复", "升温", "过热"}},
 					{"label": "大宗商品价格动能", "value": 50, "gradient": "linear-gradient(90deg,#3b82f6,#22c55e)", "labels": []string{"下行", "企稳", "上行", "偏热"}},
@@ -53,6 +61,11 @@ func GetCycleInsight(c *gin.Context) {
 	}
 	if insight.SourcesJSON != "" {
 		json.Unmarshal([]byte(insight.SourcesJSON), &sources)
+	}
+
+	// 实时宏观数据覆盖 DB 中的旧 macroCards；拉取失败才回退到 DB
+	if macroErr == nil && len(liveMacro) > 0 {
+		macroCards = liveMacro
 	}
 
 	insight.MacroCards = macroCards

@@ -72,12 +72,22 @@ Access at http://localhost (frontend on port 80, backend on port 8080).
 
 When modifying API shapes, update both `frontend/src/services/api.ts` and corresponding backend handlers.
 
+All API responses use `{ ok: bool, data?: T, error?: string }`. Auth token is passed as `Authorization` header (plain token, not Bearer).
+
 Key routes:
 - `POST /api/auth/login`, `POST /api/auth/logout`
 - `GET/POST/PUT/DELETE /api/stocks`, `/api/stocks/:code`
-- `GET /api/quotes?codes=`, `GET /api/company-summaries?codes=`, `GET /api/chart/:code?period=`, `GET /api/valuation/:code`
+- `GET /api/quotes?codes=`, `GET /api/company-summaries?codes=`, `GET /api/chart/:code?period=daily|weekly|monthly`, `GET /api/valuation/:code`
+- `GET /api/valuation-band?code=&metric=pe_ttm|pb&years=1-10`
 - `GET/PUT /api/cycle-insight`
-- `GET/POST/PUT/DELETE /api/positions`, `/api/positions/:id`
+- `GET/POST/PUT/DELETE /api/positions`, `/api/positions/:id`; `GET /api/positions?code=` filters by stock
+
+## Key Implementation Details
+
+- **`SinaQuoteClient` naming**: Despite the name, `GetQuotes` uses the Tencent Finance API (`web.sqt.gtimg.cn`), not Sina. Sina is only used for K-line data.
+- **`CycleInsight` JSON serialization**: `macroCards`, `bars`, and `sources` are slice fields with `gorm:"-"` — they are stored in separate `*JSON` string columns and manually marshaled/unmarshaled in `handlers/cycle.go`.
+- **`valuation_band_service.go`**: Computes historical PE TTM and PB bands from K-line + quarterly financial data (EPS/BPS from Eastmoney). Adds percentile tracks (p10/p30/p50/p70/p90) across the full date range. A股 financials are cumulative YTD, not quarterly — `getTTMEPS` sums the last 4 report values as an approximation.
+- **`UpdatePosition` / `DeletePosition`**: Currently stub implementations — they ignore the `:id` param. Functional position management is read/create only.
 
 ## Notes
 

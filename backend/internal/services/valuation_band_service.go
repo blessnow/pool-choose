@@ -25,6 +25,13 @@ type ValuationBandPoint struct {
 		P30 *float64 `json:"p30"`
 		P10 *float64 `json:"p10"`
 	} `json:"tracks"`
+	PriceTracks struct {
+		P90 *float64 `json:"p90"`
+		P70 *float64 `json:"p70"`
+		P50 *float64 `json:"p50"`
+		P30 *float64 `json:"p30"`
+		P10 *float64 `json:"p10"`
+	} `json:"priceTracks"`
 }
 
 // ValuationBandData 估值带数据
@@ -90,6 +97,9 @@ func GetValuationBand(code string, metric string, years int) (*ValuationBandData
 
 	// 5. 计算百分位和轨道线
 	calculatePercentiles(points)
+
+	// 5b. 反推每日股价轨道（priceTracks）：用每日的 EPS/BPS 乘以估值百分位
+	calculatePriceTracks(points, financialData, metric)
 
 	// 6. 格式化日期
 	for i := range points {
@@ -323,6 +333,38 @@ func calculatePercentiles(points []ValuationBandPoint) {
 			points[i].Tracks.P30 = &p30
 			points[i].Tracks.P10 = &p10
 		}
+	}
+}
+
+// calculatePriceTracks 把每日的估值百分位（PE/PB）反推为对应股价
+// price_at_pXX(t) = tracks.pXX(t) * factor(t)
+//   factor = EPS_TTM(t) (metric=pe_ttm) 或 BPS(t) (metric=pb)
+func calculatePriceTracks(points []ValuationBandPoint, financialData []FinancialData, metric string) {
+	for i := range points {
+		var factor float64
+		switch metric {
+		case "pe_ttm":
+			factor = getTTMEPS(points[i].Date, financialData)
+		case "pb":
+			factor = getLatestBPS(points[i].Date, financialData)
+		}
+		if factor <= 0 || math.IsNaN(factor) || math.IsInf(factor, 0) {
+			continue
+		}
+
+		project := func(p *float64) *float64 {
+			if p == nil || *p <= 0 {
+				return nil
+			}
+			v := *p * factor
+			return &v
+		}
+
+		points[i].PriceTracks.P90 = project(points[i].Tracks.P90)
+		points[i].PriceTracks.P70 = project(points[i].Tracks.P70)
+		points[i].PriceTracks.P50 = project(points[i].Tracks.P50)
+		points[i].PriceTracks.P30 = project(points[i].Tracks.P30)
+		points[i].PriceTracks.P10 = project(points[i].Tracks.P10)
 	}
 }
 
