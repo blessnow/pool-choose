@@ -27,6 +27,7 @@ func InitDB(path string) error {
 		return err
 	}
 
+	seedStocks()
 	return nil
 }
 
