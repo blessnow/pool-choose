@@ -61,9 +61,11 @@ func main() {
 		{
 			// 股票
 			auth.GET("/stocks", handlers.GetStocks)
-			auth.GET("/stocks/search", handlers.SearchStocks)
-			auth.GET("/stocks/info", handlers.GetStockInfo)
 			auth.GET("/stocks/:code", handlers.GetStock)
+			// 注意：search/info 放到独立命名空间，避免与 /stocks/:code 路径冲突
+			// （gin 在不同版本/平台对静态 vs 参数路由优先级处理可能不一致）
+			auth.GET("/stock-search", handlers.SearchStocks)
+			auth.GET("/stock-info", handlers.GetStockInfo)
 			auth.POST("/stocks", handlers.CreateStock)
 			auth.PUT("/stocks/:code", handlers.UpdateStock)
 			auth.DELETE("/stocks/:code", handlers.DeleteStock)

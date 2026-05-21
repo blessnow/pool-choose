@@ -102,7 +102,7 @@ export interface StockSearchResult {
 }
 
 export async function searchStocks(token: string, q: string, limit = 10): Promise<ApiResponse<StockSearchResult[]>> {
-  const res = await fetch(`${API_BASE}/stocks/search?q=${encodeURIComponent(q)}&limit=${limit}`, {
+  const res = await fetch(`${API_BASE}/stock-search?q=${encodeURIComponent(q)}&limit=${limit}`, {
     headers: { Authorization: token },
   });
   return res.json();
@@ -117,7 +117,7 @@ export interface StockInfo {
 }
 
 export async function getStockInfo(token: string, code: string): Promise<ApiResponse<StockInfo>> {
-  const res = await fetch(`${API_BASE}/stocks/info?code=${encodeURIComponent(code)}`, {
+  const res = await fetch(`${API_BASE}/stock-info?code=${encodeURIComponent(code)}`, {
     headers: { Authorization: token },
   });
   return res.json();
