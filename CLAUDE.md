@@ -41,9 +41,9 @@ Access at http://localhost (frontend on port 80, backend on port 8080).
 ### Backend Structure
 - `cmd/server/main.go` - Entry point, route definitions, CORS config, static file serving
 - `internal/handlers/` - HTTP handlers (auth.go, stocks.go, cycle.go)
-- `internal/services/` - Business logic, external API clients (quote_service.go)
+- `internal/services/` - External API clients and business logic: `quote_service.go` (Tencent quotes + Sina K-line), `valuation_band_service.go` (PE/PB historical bands), `macro_service.go` (CPI/PPI from Eastmoney), `stock_search_service.go` (code/name lookup)
 - `internal/models/` - GORM data models (models.go)
-- `internal/repository/` - Database access layer (db.go)
+- `internal/repository/` - Database access layer: `db.go` (init), `seed.go` (initial stock pool seeding on first run)
 
 ### Frontend Structure
 - `src/services/api.ts` - REST client, all API type definitions and calls
@@ -77,6 +77,7 @@ All API responses use `{ ok: bool, data?: T, error?: string }`. Auth token is pa
 Key routes:
 - `POST /api/auth/login`, `POST /api/auth/logout`
 - `GET/POST/PUT/DELETE /api/stocks`, `/api/stocks/:code`
+- `GET /api/stock-search?q=`, `GET /api/stock-info?code=` (lookup helpers backed by `stock_search_service.go`)
 - `GET /api/quotes?codes=`, `GET /api/company-summaries?codes=`, `GET /api/chart/:code?period=daily|weekly|monthly`, `GET /api/valuation/:code`
 - `GET /api/valuation-band?code=&metric=pe_ttm|pb&years=1-10`
 - `GET/PUT /api/cycle-insight`

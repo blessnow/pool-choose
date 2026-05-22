@@ -6,13 +6,68 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/yuchi/cycle-stock/internal/models"
 )
+
+// K线内存缓存 —— 东财对突发请求有限流，缓存可以大幅降低 500 EOF 率，
+// 也匹配真实用法（用户点单只股票，反复切换 daily/weekly/monthly）。
+type klineCacheEntry struct {
+	data     []map[string]interface{}
+	storedAt time.Time
+}
+
+var (
+	klineCache   = map[string]klineCacheEntry{}
+	klineCacheMu sync.RWMutex
+
+	// 每个 secid 在东财上能命中的分片号不同，命中过的记下来下次直接走它。
+	// 持久化到 data/em_shards.json，重启后冷启动也能命中。
+	goodShardCache   = map[string]int{}
+	goodShardCacheMu sync.RWMutex
+	shardCachePath   = "./data/em_shards.json"
+	shardCacheLoaded bool
+)
+
+func loadShardCacheOnce() {
+	goodShardCacheMu.Lock()
+	defer goodShardCacheMu.Unlock()
+	if shardCacheLoaded {
+		return
+	}
+	shardCacheLoaded = true
+	b, err := os.ReadFile(shardCachePath)
+	if err != nil {
+		return
+	}
+	_ = json.Unmarshal(b, &goodShardCache)
+}
+
+func persistShardCache() {
+	goodShardCacheMu.RLock()
+	b, err := json.Marshal(goodShardCache)
+	goodShardCacheMu.RUnlock()
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(shardCachePath, b, 0644)
+}
+
+// 不同周期的 TTL：日线 2h（盘中可手动重启拿最新），周/月线 12h。
+func klineCacheTTL(period string) time.Duration {
+	switch period {
+	case "weekly", "monthly":
+		return 12 * time.Hour
+	default:
+		return 2 * time.Hour
+	}
+}
 
 // SinaQuoteClient 行情客户端
 type SinaQuoteClient struct {
@@ -114,179 +169,188 @@ func (c *SinaQuoteClient) GetQuotes(codes []string) (map[string]models.Quote, er
 	return quotes, nil
 }
 
-// GetKLineData 获取K线数据
+// GetKLineData 获取K线数据（东方财富 push2his，前复权）
+// 周期 daily/weekly/monthly 直接对应 klt 101/102/103，无需本地聚合。
 func (c *SinaQuoteClient) GetKLineData(code string, period string) ([]map[string]interface{}, error) {
-	// 转换股票代码格式
-	var sinaCode string
+	loadShardCacheOnce()
+	cacheKey := code + ":" + period
+	ttl := klineCacheTTL(period)
+	klineCacheMu.RLock()
+	if e, ok := klineCache[cacheKey]; ok && time.Since(e.storedAt) < ttl {
+		klineCacheMu.RUnlock()
+		return e.data, nil
+	}
+	klineCacheMu.RUnlock()
+
+	// 转换股票代码格式：6/5 开头沪市 secid=1.XXX，其余深市 secid=0.XXX
+	var secid string
 	if len(code) == 6 {
 		if code[0] == '6' || code[0] == '5' {
-			sinaCode = "sh" + code
+			secid = "1." + code
 		} else {
-			sinaCode = "sz" + code
+			secid = "0." + code
 		}
 	} else {
-		sinaCode = code
+		secid = "0." + code
 	}
 
-	client := &http.Client{
-		Timeout: 15 * time.Second,
-	}
-
-	// 对于日线和周线，直接从新浪获取
-	// 对于月线，从日线数据聚合生成
-	var scale string
-	var dataLen int
+	var klt string
+	// lmt 不能太大，否则东财会直接 EOF（实测 lmt=10000 对部分 secid 一定断链）
+	var primaryLmt, fallbackLmt int
 	switch period {
-	case "daily":
-		scale = "240"
-		dataLen = 300
 	case "weekly":
-		scale = "1200"
-		dataLen = 300
+		klt = "102"
+		primaryLmt, fallbackLmt = 1500, 500 // ~30 年 / 10 年
 	case "monthly":
-		// 月线需要更多日线数据来聚合
-		scale = "240"
-		dataLen = 600
+		klt = "103"
+		primaryLmt, fallbackLmt = 800, 300 // ~67 年 / 25 年
 	default:
-		scale = "240"
-		dataLen = 300
+		klt = "101"
+		primaryLmt, fallbackLmt = 5000, 1000 // ~20 年 / 4 年
 	}
 
-	url := fmt.Sprintf("https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData?symbol=%s&scale=%s&datalen=%d",
-		sinaCode, scale, dataLen)
-
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("创建请求失败: %v", err)
+	// 东财 push2his 每个 secid 只能命中 ~10 个分片号（实测有规律但不公开）。
+	// 策略：先用上次命中过的分片号，没命中过就并发扇出十几个分片，谁先返回用谁。
+	buildURL := func(shard, lmt int) string {
+		return fmt.Sprintf(
+			"https://%d.push2his.eastmoney.com/api/qt/stock/kline/get?secid=%s&klt=%s&fqt=1&beg=0&end=20500101&lmt=%d&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+			shard, secid, klt, lmt,
+		)
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("请求K线数据失败: %v", err)
+	fetch := func(shard, lmt int, timeout time.Duration) ([]byte, error) {
+		client := &http.Client{Timeout: timeout}
+		req, err := http.NewRequest("GET", buildURL(shard, lmt), nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
+		req.Header.Set("Referer", "https://quote.eastmoney.com/")
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+		return io.ReadAll(resp.Body)
 	}
-	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("读取响应失败: %v", err)
+	// 顺序探测分片：先用缓存的"已知好分片"；不行就遍历 24 个均匀分布的分片号。
+	// 失败时 EOF 通常 100-300ms 返回，遍历完最坏 ~5s。东财不喜欢并发扇出（会限流）。
+	shardPool := []int{2, 7, 12, 16, 21, 26, 31, 36, 41, 46, 50, 55, 57, 61, 64, 67, 71, 73, 76, 79, 82, 86, 88, 91, 94, 97, 98}
+
+	var body []byte
+	winningShard := -1
+	var lastErr error
+
+	tryShard := func(shard, lmt int) bool {
+		b, err := fetch(shard, lmt, 5*time.Second)
+		if err != nil {
+			lastErr = err
+			return false
+		}
+		if len(b) < 200 { // 太短的响应一般是空 data 或错误
+			lastErr = fmt.Errorf("response too short (%d bytes)", len(b))
+			return false
+		}
+		body = b
+		winningShard = shard
+		return true
+	}
+
+	// 1) 先试缓存的"好分片"
+	goodShardCacheMu.RLock()
+	cachedShard, hasCached := goodShardCache[secid]
+	goodShardCacheMu.RUnlock()
+	if hasCached && tryShard(cachedShard, primaryLmt) {
+		// hit
+	} else {
+		// 2) 遍历分片池，找一个能返回数据的
+		for _, s := range shardPool {
+			if hasCached && s == cachedShard {
+				continue
+			}
+			if tryShard(s, primaryLmt) {
+				break
+			}
+			time.Sleep(80 * time.Millisecond) // 控制对 EM 的速率，避免触发限流
+		}
+		// 3) 还是不行，用小 lmt 再扫一遍
+		if body == nil {
+			for _, s := range shardPool {
+				if tryShard(s, fallbackLmt) {
+					break
+				}
+				time.Sleep(80 * time.Millisecond)
+			}
+		}
+	}
+
+	if body == nil {
+		// 限流时也回退到旧缓存（即使过期），避免完全空白
+		klineCacheMu.RLock()
+		if e, ok := klineCache[cacheKey]; ok && len(e.data) > 0 {
+			klineCacheMu.RUnlock()
+			return e.data, nil
+		}
+		klineCacheMu.RUnlock()
+		if lastErr == nil {
+			lastErr = fmt.Errorf("所有分片均无返回")
+		}
+		return nil, fmt.Errorf("请求K线数据失败: %v", lastErr)
+	}
+
+	if winningShard >= 0 {
+		goodShardCacheMu.Lock()
+		prev, had := goodShardCache[secid]
+		goodShardCache[secid] = winningShard
+		goodShardCacheMu.Unlock()
+		if !had || prev != winningShard {
+			go persistShardCache()
+		}
+	}
+
+	var parsed struct {
+		Data *struct {
+			Klines []string `json:"klines"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("解析JSON失败: %v", err)
 	}
 
 	result := make([]map[string]interface{}, 0)
-
-	var klines []struct {
-		Day     string `json:"day"`
-		Open    string `json:"open"`
-		Close   string `json:"close"`
-		High    string `json:"high"`
-		Low     string `json:"low"`
-		Volume  string `json:"volume"`
-	}
-	if err := json.Unmarshal(body, &klines); err != nil {
+	if parsed.Data == nil {
 		return result, nil
 	}
 
-	// 如果是月线，从日线数据聚合
-	if period == "monthly" {
-		return aggregateToMonthly(klines), nil
-	}
-
-	for _, k := range klines {
-		item := map[string]interface{}{
-			"date":   k.Day,
-			"open":   parseFloat(k.Open),
-			"close":  parseFloat(k.Close),
-			"high":   parseFloat(k.High),
-			"low":    parseFloat(k.Low),
-			"volume": parseFloat(k.Volume),
-		}
-		result = append(result, item)
-	}
-
-	return result, nil
-}
-
-// aggregateToMonthly 从日线数据聚合生成月线数据
-func aggregateToMonthly(dailyKlines []struct {
-	Day     string `json:"day"`
-	Open    string `json:"open"`
-	Close   string `json:"close"`
-	High    string `json:"high"`
-	Low     string `json:"low"`
-	Volume  string `json:"volume"`
-}) []map[string]interface{} {
-	if len(dailyKlines) == 0 {
-		return []map[string]interface{}{}
-	}
-
-	// 按月份分组
-	monthlyData := make(map[string][]struct {
-		Day     string `json:"day"`
-		Open    string `json:"open"`
-		Close   string `json:"close"`
-		High    string `json:"high"`
-		Low     string `json:"low"`
-		Volume  string `json:"volume"`
-	})
-
-	for _, k := range dailyKlines {
-		// 日期格式: 2024-11-11，取年月作为key
-		if len(k.Day) >= 7 {
-			monthKey := k.Day[:7] // "2024-11"
-			monthlyData[monthKey] = append(monthlyData[monthKey], k)
-		}
-	}
-
-	// 聚合每个月的数据
-	result := make([]map[string]interface{}, 0)
-	for _, days := range monthlyData {
-		if len(days) == 0 {
+	// klines 每行：日期,开,收,高,低,成交量,成交额,振幅,涨跌幅,涨跌额,换手率
+	for _, line := range parsed.Data.Klines {
+		f := strings.Split(line, ",")
+		if len(f) < 6 {
 			continue
 		}
-
-		// 月开盘价 = 该月第一个交易日的开盘价
-		// 月收盘价 = 该月最后一个交易日的收盘价
-		// 月最高价 = 该月所有交易日最高价的最大值
-		// 月最低价 = 该月所有交易日最低价的最小值
-		// 月成交量 = 该月所有交易日成交量的总和
-		monthOpen := parseFloat(days[0].Open)
-		monthClose := parseFloat(days[len(days)-1].Close)
-		monthHigh := 0.0
-		monthLow := 999999.0
-		monthVolume := 0.0
-
-		for _, d := range days {
-			high := parseFloat(d.High)
-			low := parseFloat(d.Low)
-			volume := parseFloat(d.Volume)
-			if high > monthHigh {
-				monthHigh = high
-			}
-			if low < monthLow {
-				monthLow = low
-			}
-			monthVolume += volume
-		}
-
-		// 使用该月最后一个交易日作为日期
-		lastDay := days[len(days)-1].Day
-
 		result = append(result, map[string]interface{}{
-			"date":   lastDay,
-			"open":   monthOpen,
-			"close":  monthClose,
-			"high":   monthHigh,
-			"low":    monthLow,
-			"volume": monthVolume,
+			"date":   f[0],
+			"open":   parseFloat(f[1]),
+			"close":  parseFloat(f[2]),
+			"high":   parseFloat(f[3]),
+			"low":    parseFloat(f[4]),
+			"volume": parseFloat(f[5]),
 		})
 	}
 
-	// 按日期排序（从旧到新）
+	// 东财默认按时间升序返回，这里兜底排序保证下游聚合/百分位计算稳定
 	sort.Slice(result, func(i, j int) bool {
 		return result[i]["date"].(string) < result[j]["date"].(string)
 	})
 
-	return result
+	if len(result) > 0 {
+		klineCacheMu.Lock()
+		klineCache[cacheKey] = klineCacheEntry{data: result, storedAt: time.Now()}
+		klineCacheMu.Unlock()
+	}
+
+	return result, nil
 }
 
 func parseFloat(s string) float64 {
