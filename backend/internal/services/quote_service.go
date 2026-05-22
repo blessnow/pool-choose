@@ -286,7 +286,14 @@ func (c *SinaQuoteClient) GetKLineData(code string, period string) ([]map[string
 	}
 
 	if body == nil {
-		// 限流时也回退到旧缓存（即使过期），避免完全空白
+		// 东财全失败 → 尝试腾讯 fqkline 兜底（历史短一点，但 002096 这类 EM 没数据的能拿到）
+		if tencentData, err := fetchTencentKLine(code, period); err == nil && len(tencentData) > 0 {
+			klineCacheMu.Lock()
+			klineCache[cacheKey] = klineCacheEntry{data: tencentData, storedAt: time.Now()}
+			klineCacheMu.Unlock()
+			return tencentData, nil
+		}
+		// 腾讯也挂了 → 回退到（即使过期的）旧缓存
 		klineCacheMu.RLock()
 		if e, ok := klineCache[cacheKey]; ok && len(e.data) > 0 {
 			klineCacheMu.RUnlock()
@@ -350,6 +357,98 @@ func (c *SinaQuoteClient) GetKLineData(code string, period string) ([]map[string
 		klineCacheMu.Unlock()
 	}
 
+	return result, nil
+}
+
+// fetchTencentKLine 从腾讯 web.ifzq.gtimg.cn 拉 K 线（前复权）
+// 日线上限约 640 条 (~2.5 年)，周/月线足够长。EM 拿不到的股票用这个兜底。
+func fetchTencentKLine(code, period string) ([]map[string]interface{}, error) {
+	var symbol string
+	if len(code) == 6 {
+		if code[0] == '6' || code[0] == '5' {
+			symbol = "sh" + code
+		} else {
+			symbol = "sz" + code
+		}
+	} else {
+		symbol = code
+	}
+
+	var qqPeriod string
+	var n int
+	switch period {
+	case "weekly":
+		qqPeriod, n = "week", 640
+	case "monthly":
+		qqPeriod, n = "month", 640
+	default:
+		qqPeriod, n = "day", 640
+	}
+
+	url := fmt.Sprintf("https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=%s,%s,,,%d,qfq", symbol, qqPeriod, n)
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("Referer", "https://gu.qq.com/")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	// 响应结构: {"code":0,"data":{"<symbol>":{"qfqday":[["date","open","close","high","low","volume"], ...]}}}
+	// 异常时 data.<symbol> 会变成 list 而不是 dict，用 RawMessage 容错
+	var top struct {
+		Code int                                   `json:"code"`
+		Data map[string]map[string]json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(body, &top); err != nil {
+		return nil, fmt.Errorf("解析腾讯K线失败: %v", err)
+	}
+	sym, ok := top.Data[symbol]
+	if !ok {
+		return nil, fmt.Errorf("腾讯K线无数据: %s", symbol)
+	}
+	raw, ok := sym["qfq"+qqPeriod]
+	if !ok {
+		raw, ok = sym[qqPeriod]
+		if !ok {
+			return nil, fmt.Errorf("腾讯K线字段缺失: qfq%s", qqPeriod)
+		}
+	}
+	var rows [][]interface{}
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		return nil, fmt.Errorf("解析K线数组失败: %v", err)
+	}
+
+	result := make([]map[string]interface{}, 0, len(rows))
+	for _, r := range rows {
+		if len(r) < 6 {
+			continue
+		}
+		// 每个字段都是 string，转一道
+		toStr := func(v interface{}) string {
+			if s, ok := v.(string); ok {
+				return s
+			}
+			return fmt.Sprintf("%v", v)
+		}
+		result = append(result, map[string]interface{}{
+			"date":   toStr(r[0]),
+			"open":   parseFloat(toStr(r[1])),
+			"close":  parseFloat(toStr(r[2])),
+			"high":   parseFloat(toStr(r[3])),
+			"low":    parseFloat(toStr(r[4])),
+			"volume": parseFloat(toStr(r[5])),
+		})
+	}
 	return result, nil
 }
 
