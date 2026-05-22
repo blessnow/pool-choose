@@ -7,6 +7,24 @@ interface ApiResponse<T> {
   token?: string;  // 登录接口直接返回token
 }
 
+// 统一处理认证响应：401 时清除本地 token 并刷新到登录页
+async function handleRes<T>(res: Response): Promise<ApiResponse<T>> {
+  if (res.status === 401) {
+    if (localStorage.getItem('token')) {
+      localStorage.removeItem('token');
+      if (typeof window !== 'undefined') {
+        window.location.reload();
+      }
+    }
+    return { ok: false, error: '会话已过期，请重新登录' };
+  }
+  try {
+    return await res.json();
+  } catch {
+    return { ok: false, error: `HTTP错误: ${res.status}` };
+  }
+}
+
 // 认证
 export async function login(password: string): Promise<ApiResponse<{ token: string }>> {
   try {
@@ -35,7 +53,7 @@ export async function logout(token: string): Promise<ApiResponse<null>> {
     method: 'POST',
     headers: { Authorization: token },
   });
-  return res.json();
+  return handleRes(res);
 }
 
 // 股票
@@ -91,7 +109,7 @@ export async function getStocks(token: string): Promise<ApiResponse<StockWithQuo
   const res = await fetch(`${API_BASE}/stocks`, {
     headers: { Authorization: token },
   });
-  return res.json();
+  return handleRes(res);
 }
 
 export interface StockSearchResult {
@@ -105,7 +123,7 @@ export async function searchStocks(token: string, q: string, limit = 10): Promis
   const res = await fetch(`${API_BASE}/stock-search?q=${encodeURIComponent(q)}&limit=${limit}`, {
     headers: { Authorization: token },
   });
-  return res.json();
+  return handleRes(res);
 }
 
 export interface StockInfo {
@@ -120,14 +138,14 @@ export async function getStockInfo(token: string, code: string): Promise<ApiResp
   const res = await fetch(`${API_BASE}/stock-info?code=${encodeURIComponent(code)}`, {
     headers: { Authorization: token },
   });
-  return res.json();
+  return handleRes(res);
 }
 
 export async function getStock(token: string, code: string): Promise<ApiResponse<Stock>> {
   const res = await fetch(`${API_BASE}/stocks/${code}`, {
     headers: { Authorization: token },
   });
-  return res.json();
+  return handleRes(res);
 }
 
 export async function createStock(token: string, stock: Partial<Stock>): Promise<ApiResponse<Stock>> {
@@ -136,7 +154,7 @@ export async function createStock(token: string, stock: Partial<Stock>): Promise
     headers: { 'Content-Type': 'application/json', Authorization: token },
     body: JSON.stringify(stock),
   });
-  return res.json();
+  return handleRes(res);
 }
 
 export async function updateStock(token: string, code: string, stock: Partial<Stock>): Promise<ApiResponse<Stock>> {
@@ -145,7 +163,7 @@ export async function updateStock(token: string, code: string, stock: Partial<St
     headers: { 'Content-Type': 'application/json', Authorization: token },
     body: JSON.stringify(stock),
   });
-  return res.json();
+  return handleRes(res);
 }
 
 export async function deleteStock(token: string, code: string): Promise<ApiResponse<null>> {
@@ -153,7 +171,7 @@ export async function deleteStock(token: string, code: string): Promise<ApiRespo
     method: 'DELETE',
     headers: { Authorization: token },
   });
-  return res.json();
+  return handleRes(res);
 }
 
 // 行情
@@ -161,21 +179,21 @@ export async function getQuotes(token: string, codes: string[]): Promise<ApiResp
   const res = await fetch(`${API_BASE}/quotes?codes=${codes.join(',')}`, {
     headers: { Authorization: token },
   });
-  return res.json();
+  return handleRes(res);
 }
 
 export async function getCompanySummaries(token: string, codes: string[]): Promise<ApiResponse<Record<string, CompanySummary>>> {
   const res = await fetch(`${API_BASE}/company-summaries?codes=${codes.join(',')}`, {
     headers: { Authorization: token },
   });
-  return res.json();
+  return handleRes(res);
 }
 
 export async function getChart(token: string, code: string, period: string = 'daily'): Promise<ApiResponse<any[]>> {
   const res = await fetch(`${API_BASE}/chart/${code}?period=${period}`, {
     headers: { Authorization: token },
   });
-  return res.json();
+  return handleRes(res);
 }
 
 // 估值数据
@@ -212,7 +230,7 @@ export async function getValuation(token: string, code: string): Promise<ApiResp
   const res = await fetch(`${API_BASE}/valuation/${code}`, {
     headers: { Authorization: token },
   });
-  return res.json();
+  return handleRes(res);
 }
 
 // 估值带数据（PE/PB Band）
@@ -260,7 +278,7 @@ export async function getValuationBand(
   const res = await fetch(`${API_BASE}/valuation-band?code=${code}&metric=${metric}&years=${years}`, {
     headers: { Authorization: token },
   });
-  return res.json();
+  return handleRes(res);
 }
 
 // 周期分析
@@ -299,7 +317,7 @@ export async function getCycleInsight(token: string): Promise<ApiResponse<CycleI
   const res = await fetch(`${API_BASE}/cycle-insight`, {
     headers: { Authorization: token },
   });
-  return res.json();
+  return handleRes(res);
 }
 
 export async function updateCycleInsight(token: string, insight: Partial<CycleInsight>): Promise<ApiResponse<CycleInsight>> {
@@ -308,7 +326,7 @@ export async function updateCycleInsight(token: string, insight: Partial<CycleIn
     headers: { 'Content-Type': 'application/json', Authorization: token },
     body: JSON.stringify(insight),
   });
-  return res.json();
+  return handleRes(res);
 }
 
 // 持仓记录
@@ -327,7 +345,7 @@ export async function getPositions(token: string, code?: string): Promise<ApiRes
   const res = await fetch(url, {
     headers: { Authorization: token },
   });
-  return res.json();
+  return handleRes(res);
 }
 
 export async function createPosition(token: string, position: Partial<Position>): Promise<ApiResponse<Position>> {
@@ -336,7 +354,7 @@ export async function createPosition(token: string, position: Partial<Position>)
     headers: { 'Content-Type': 'application/json', Authorization: token },
     body: JSON.stringify(position),
   });
-  return res.json();
+  return handleRes(res);
 }
 
 export async function updatePosition(token: string, id: number, position: Partial<Position>): Promise<ApiResponse<Position>> {
@@ -345,7 +363,7 @@ export async function updatePosition(token: string, id: number, position: Partia
     headers: { 'Content-Type': 'application/json', Authorization: token },
     body: JSON.stringify(position),
   });
-  return res.json();
+  return handleRes(res);
 }
 
 export async function deletePosition(token: string, id: number): Promise<ApiResponse<null>> {
@@ -353,5 +371,5 @@ export async function deletePosition(token: string, id: number): Promise<ApiResp
     method: 'DELETE',
     headers: { Authorization: token },
   });
-  return res.json();
+  return handleRes(res);
 }
